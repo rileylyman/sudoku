@@ -1,0 +1,18 @@
+{
+    "version": "0.2.0",
+    "configurations": [
+        {
+            "name": "Launch Project",
+            "type": "cppdbg",
+            "request": "launch",
+            "program": "${workspaceFolder}/.build/target.exe",
+            "args": [],
+            "stopAtEntry": false,
+            "cwd": "${workspaceFolder}",
+            "environment": [],
+            "externalConsole": false,
+            "miDebuggerPath": "C:\\Users\\Riley\\scoop\\shims\\gdb.exe",
+            "preLaunchTask": "build",
+        }
+    ]
+}
