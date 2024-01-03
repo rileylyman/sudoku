@@ -1,6 +1,15 @@
+IMMUTABLE_COLOR :: rl.Color.{0x20, 0x20, 0x20, 0xff};
+GUESS_COLOR :: rl.Color.{0x23, 0x23, 0x23, 0xff};
+SCRATCH_COLOR :: rl.Color.{0x28, 0x28, 0x28, 0xff};
+CONFLICT_COLOR :: rl.Color.{0xf2, 0x64, 0x19, 0xff};
+SELECT_COLOR :: rl.Color.{0xa0, 0xa0, 0xa0, 0xff};
+TEXT_COLOR :: rl.Color.{0xa0, 0xa0, 0xa0, 0xff};
+BORDER_COLOR :: rl.Color.{0x10, 0x10, 0x10, 0xff};
+BACKGROUND_COLOR :: rl.Color.{0x5, 0x5, 0x5, 0xff};
 
 Sudoku :: struct {
-    cells: [..]Cell;
+    cells: [81]Cell;
+    changed := false;
 }
 
 Cell :: struct {
@@ -17,9 +26,32 @@ update_cell_text :: (using cell: *Cell) {
     else text[0] = xx (value + #char "0");
 }
 
+serialize :: (using sudoku: *Sudoku) -> string {
+    builder: String_Builder = .{allocator = temp};
+
+    for cells {
+        if it_index % 9 == 3 || it_index % 9 == 6 {
+            append(*builder, #char " ");
+        } else if it_index % 9 == 0 && it_index > 0 {
+            append(*builder, #char "\n");
+        } 
+        if it_index % 27 == 0 && it_index > 0 {
+            append(*builder, #char "\n");
+        }
+        if it.value == -1 {
+            append(*builder, #char ".");
+        } else {
+            append(*builder, cast(u8) it.value + #char "0");
+        }
+    }
+
+    return builder_to_string(*builder, temp);
+}
+
 make_sudoku :: (serial: string) -> *Sudoku {
     using sudoku := New(Sudoku);
 
+    cell_idx := 0;
     chars := cast([]u8)serial;
     for chars {
         cell: Cell;
@@ -27,14 +59,16 @@ make_sudoku :: (serial: string) -> *Sudoku {
             continue;
         } else if is_digit(it) {
             cell.value = it - #char "0";
-            update_cell_text(*cell);
+           update_cell_text(*cell);
             cell.scratch_side = false;
             cell.immutable = true;
         } else if it != #char "." {
             print("error: serial import string had invalid character: % (%)\n", it, cast(s32)it);
             return null;
         }
-        array_add(*cells, cell);
+        print("%\n", cell);
+        cells[cell_idx] = cell;
+        cell_idx += 1;
     }
 
     return sudoku;
@@ -59,6 +93,8 @@ get_cell_block_idx :: (row: int, col: int) -> int {
 put_number :: (using sudoku: *Sudoku, row: int, col: int, value: u8) {
     cell := get_cell_ptr(sudoku, row, col);
     if cell.immutable return;
+
+    changed = true;
 
     if cell.scratch_side && (cell.candidates & (1 << (value - 1))) {
         cell.candidates &= xx ~(cast(u16) 1 << (value - 1));
@@ -114,7 +150,6 @@ check_conflicts :: (using sudoku: *Sudoku) {
     for row: 0..8 {
         for col: 0..8 {
             cell := get_cell_ptr(sudoku, row, col);
-            if cell.value == -1 continue;
 
             row_arr, col_arr, block_arr := get_row_col_block(sudoku, row, col);
             cell.has_conflict = 
@@ -141,8 +176,26 @@ main :: () {
         return;
     }
 
-    serial := file.read_entire_file(args.path);
-    sudoku := make_sudoku(serial);
+    bin_file, bin_success := file.file_open(tprint("%.bin", args.path));
+    txt_file, txt_success := file.file_open(tprint("%.txt", args.path));
+    file.file_close(*bin_file);
+    file.file_close(*txt_file);
+
+    if !bin_success && !txt_success {
+        print("error, %.txt and/or %1.bin does not exist and are required", args.path);
+        return;
+    }
+
+    sudoku: *Sudoku;
+    if bin_success {
+        sudoku_buf := file.read_entire_file(tprint("%.bin", args.path));
+        sudoku = cast(*Sudoku) sudoku_buf.data;
+    } else {
+        serial := file.read_entire_file(tprint("%.txt", args.path));
+        defer free(serial);
+        sudoku = make_sudoku(serial);
+    }
+
     check_conflicts(sudoku);
     if !sudoku {
         return;
@@ -157,8 +210,8 @@ main :: () {
 
     cell_size: s32 : #run min(screen_width / 10, screen_height / 10);
     cell_border: s32 : 2;
-    board_border: s32 : 4;
-    block_border: s32 : 4;
+    board_border: s32 : 0;
+    block_border: s32 : 8;
     cell_and_border_size :: cell_size + cell_border * 2;
     board_size :: cell_and_border_size * 9 + board_border * 2 + block_border * 2;
 
@@ -188,7 +241,11 @@ main :: () {
     }
 
     rl.InitWindow(screen_width, screen_height, "Sudoku");
-    rl.SetTargetFPS(60);
+    rl.SetTargetFPS(50);
+
+    font_size :: 48.0;
+    small_font_size :: font_size / 2;
+    font := rl.LoadFontEx(temp_c_string("OverpassMono-Regular.ttf"), xx font_size, null, 0);
 
     down_key :: cast(s32) rl.KeyboardKey.J;
     up_key :: cast(s32) rl.KeyboardKey.K;
@@ -239,21 +296,21 @@ main :: () {
 
         rl.BeginDrawing();
 
-        rl.ClearBackground(.{30, 30, 35, 255});
+        rl.ClearBackground(BACKGROUND_COLOR);
 
         rl.DrawRectangle(
             start_x,
             start_y,
             board_size,
             board_size,
-            .{20, 100, 80, 255}
+            BORDER_COLOR,
         );
 
         for pos, pos_idx: positions {
             cell := *sudoku.cells[pos_idx];
-            color := ifx cell.immutable    then rl.Color.{30, 30, 30, 255} 
-                else ifx cell.scratch_side then rl.Color.{55, 55, 55, 255} 
-                else                            rl.Color.{40, 40, 40, 255};
+            color := ifx cell.immutable    then IMMUTABLE_COLOR
+                else ifx cell.scratch_side then SCRATCH_COLOR
+                else                            GUESS_COLOR;
 
             row, col := pos_to_row_col(pos_idx);
             cell_is_selected := row == input_state.selected_row && col == input_state.selected_col;
@@ -267,19 +324,22 @@ main :: () {
                 );
             }
 
-            if cell.has_conflict draw_border(pos, .{150, 50, 50, 255});
-            if cell_is_selected draw_border(pos, .{200, 200, 33, 120});
+            if cell.has_conflict draw_border(pos, CONFLICT_COLOR);
+            if cell_is_selected draw_border(pos, SELECT_COLOR);
 
             rl.DrawRectangle(pos[0], pos[1], cell_size, cell_size, color);
 
-            font_size: s32 = 48;
             if !cell.scratch_side {
-                rl.DrawText(
+                rl.DrawTextEx(
+                    font,
                     *cell.text[0],
-                    pos[0] + cell_size / 2 - font_size / 4,
-                    pos[1] + cell_size / 2 - font_size / 2,
+                    .{
+                    xx (pos[0] + cell_size / 2 - font_size / 4),
+                    xx (pos[1] + cell_size / 2 - font_size / 2),
+                    },
                     font_size, 
-                    .{20, 100, 80, 255}
+                    1.0,
+                    TEXT_COLOR,
                 );
             }
 
@@ -289,18 +349,27 @@ main :: () {
                 if cell.candidates & (1 << candidate) == 0 continue;
 
                 text := u8.[cast(u8) candidate + 1 + cast(u8) #char "0", 0];
-                small_font_size := font_size / 3;
-                rl.DrawText(
+                rl.DrawTextEx(
+                    font,
                     *text[0],
-                    pos[0] + (cast(s32) candidate % 3) * cell_size / 3  + cell_size / 6 - small_font_size / 4,
-                    pos[1] + (cast(s32) candidate / 3) * cell_size / 3  + cell_size / 6 - small_font_size / 2,
+                    .{
+                    xx (pos[0] + (cast(s32) candidate % 3) * cell_size / 3  + cell_size / 6 - small_font_size / 4),
+                    xx (pos[1] + (cast(s32) candidate / 3) * cell_size / 3  + cell_size / 6 - small_font_size / 2),
+                    },
                     small_font_size,
-                    .{20, 100, 80, 255}
+                    1.0,
+                    TEXT_COLOR
                 );
             }
         }
-
         rl.EndDrawing();
+
+        if sudoku.changed {
+            sudoku.changed = false;
+            // file.write_entire_file(tprint("%_saved.txt", args.path), serialize(sudoku));
+            file.write_entire_file(tprint("%.bin", args.path), sudoku, size_of(Sudoku));
+        }
+        reset_temporary_storage();
     }
 
     rl.CloseWindow();
